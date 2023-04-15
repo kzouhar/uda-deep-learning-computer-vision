@@ -7,13 +7,14 @@ import torch.optim as optim
 import torchvision
 import torchvision.models as models
 import torchvision.transforms as transforms
+import smdebug.pytorch as smd
 
 import argparse
 
 
 #TODO: Import dependencies for Debugging andd Profiling
 
-def test(model, test_loader, criterion, device):
+def test(model, test_loader, criterion, device, hook):
     '''
     TODO: Complete this function that can take a model and a 
           testing data loader and will get the test accuray/loss of the model
@@ -23,6 +24,8 @@ def test(model, test_loader, criterion, device):
     model.eval()
     running_loss=0
     running_corrects=0
+
+    hook.set_mode(smd.modes.EVAL)
 
     for inputs, labels in test_loader:
         inputs=inputs.to(device)
@@ -37,7 +40,7 @@ def test(model, test_loader, criterion, device):
     total_acc = running_corrects/ len(test_loader.dataset)
     print(f"Testing Accuracy: {100*total_acc}, Testing Loss: {total_loss}")
 
-def train(model, train_loader, validation_loader, criterion, optimizer, device):
+def train(model, train_loader, validation_loader, criterion, optimizer, device, hook):
     '''
     TODO: Complete this function that can take a model and
           data loaders for training and will get train the model
@@ -47,6 +50,8 @@ def train(model, train_loader, validation_loader, criterion, optimizer, device):
     best_loss=1e6
     image_dataset={'train':train_loader, 'valid':validation_loader}
     loss_counter=0
+
+    hook.set_mode(smd.modes.TRAIN)
 
     for epoch in range(epochs):
         for phase in ['train', 'valid']:
@@ -157,7 +162,6 @@ def main(args):
     '''
     TODO: Initialize a model by calling the net function
     '''
-
     batch_size = 2
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
