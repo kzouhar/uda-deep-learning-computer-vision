@@ -1,173 +1,228 @@
-import json
-import os
-
 import numpy as np
+import pandas as pd
 import torch
+import os
 import torch.nn as nn
 import torch.optim as optim
+import torchvision
 import torchvision.models as models
-import torch.nn.functional as F
-import logging
+import torchvision.transforms as transforms
+from torchvision.io import read_image
+from torch.utils.data import Dataset, DataLoader
+
 import argparse
+import csv
 
-from smdebug.core import modes
-from torchvision import datasets, transforms
-from smdebug.pytorch import get_hook
+# Add this line of you don't want your job to fail unexpected after multiple hours of training
+# https://stackoverflow.com/questions/12984426/pil-ioerror-image-file-truncated-with-big-images
+from PIL import ImageFile
 
-logger = logging.getLogger(__name__)
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-def test(model, test_loader):
+
+def test(model, test_loader, criterion, device):
     '''
-    TODO: Complete this function that can take a model and a
-          testing data loader and will get the test accuray/loss of the model
-          Remember to include any debugging/profiling hooks that you might need
+    This function takes a model and a testing data loader and will get the test accuray/loss of the model
     '''
-    hook = get_hook(create_if_not_exists=True)
-
+    print("Testing Model on Whole Testing Dataset")
     model.eval()
-    if hook:
-        hook.set_mode(modes.EVAL)
+    running_loss = 0.0
+    running_corrects = 0
 
-    test_loss = 0
-    correct = 0
-    with torch.no_grad():
-        for data, target in test_loader:
-            output = model(data)
-            test_loss += F.nll_loss(output, target, size_average=False).item()  # sum up batch loss
-            pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
-            correct += pred.eq(target.view_as(pred)).sum().item()
+    for inputs, labels in test_loader:
+        inputs = inputs.to(device)
+        labels = labels.to(device)
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+        _, preds = torch.max(outputs, 1)
+        running_loss += float(loss.item() * inputs.size(0))
+        running_corrects += float(torch.sum(preds == labels.data))
 
-    test_loss /= len(test_loader.dataset)
-    logger.info(
-        "Test set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n".format(
-            test_loss, correct, len(test_loader.dataset), 100.0 * correct / len(test_loader.dataset)
-        )
-    )
-def train(args):
-    train_loader = _get_train_data_loader(args.batch_size, args.data_dir)
-    test_loader = _get_test_data_loader(args.test_batch_size, args.data_dir)
-    hook = get_hook(create_if_not_exists=True)
+    total_loss = float(running_loss) // float(len(test_loader.dataset))
+    total_acc = float(running_corrects) // float(len(test_loader.dataset))
 
-    model = net()
-
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-
-    if hook:
-        hook.register_loss(optimizer)
-
-    for epoch in range(1, args.epochs + 1):
-        if hook:
-            hook.set_mode(modes.TRAIN)
-        model.train()
-        for batch_idx, (data, target) in enumerate(train_loader, 1):
-            optimizer.zero_grad()
-            output = model(data)
-            loss = F.nll_loss(output, target)
-            loss.backward()
-            optimizer.step()
-            if batch_idx % 100 == 0:
-                logger.info(
-                    "Train Epoch: {} [{}/{} ({:.0f}%)] Loss: {:.6f}".format(
-                        epoch,
-                        batch_idx * len(data),
-                        len(train_loader.dataset),
-                        100.0 * batch_idx / len(train_loader),
-                        loss.item(),
-                        )
-                )
-        if hook:
-            hook.set_mode(modes.EVAL)
-        test(model, test_loader)
-    save_model(model, args.model_dir)
+    # here works regexp for "Testing Loss"
+    print(f"Testing Loss: {total_loss}")
+    print(f"Testing Accuracy: {total_acc}")
 
 
-def save_model(model, model_dir):
-    logger.info("Saving the model.")
-    path = os.path.join(model_dir, "model.pth")
-    torch.save(model.cpu().state_dict(), path)
-
-def net():
+def train(model, train_loader, validation_loader, criterion, optimizer, device):
     '''
-    TODO: Complete this function that initializes your model
-          Remember to use a pretrained model
+    This function takes a model and data loaders for training and will get train the model
     '''
-    model = models.resnet18(pretrained=True)
+    # Number of epochs don't matter here - hpo tuning will be stopped after first epoch (see end of loop)
+    epochs = 5
+    best_loss = float(1e6)
+    image_dataset = {'train': train_loader, 'valid': validation_loader}
+    loss_counter = 0
+
+    for epoch in range(epochs):
+        for phase in ['train', 'valid']:
+            print(f"Epoch: {epoch}, Phase: {phase}")
+            if phase == 'train':
+                model.train()
+            else:
+                model.eval()
+            running_loss = 0.0
+            running_corrects = 0.0
+            running_samples = 0
+
+            total_samples_in_phase = len(image_dataset[phase].dataset)
+
+            for inputs, labels in image_dataset[phase]:
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+
+                if phase == 'train':
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                _, preds = torch.max(outputs, 1)
+                running_loss += float(loss.item() * inputs.size(0))
+                running_corrects += float(torch.sum(preds == labels.data))
+                running_samples += len(inputs)
+
+                accuracy = float(running_corrects) / float(running_samples)
+                print("Epoch {}, Phase {}, Images [{}/{} ({:.0f}%)] Loss: {:.2f} Accuracy: {}/{} ({:.2f}%)".format(
+                    epoch,
+                    phase,
+                    running_samples,
+                    total_samples_in_phase,
+                    100.0 * (float(running_samples) / float(total_samples_in_phase)),
+                    loss.item(),
+                    running_corrects,
+                    running_samples,
+                    100.0 * accuracy,
+                ))
+
+                # NOTE: Comment lines below to train and test on whole dataset
+                if (running_samples > (0.1 * total_samples_in_phase)):
+                    break
+
+            epoch_loss = float(running_loss) // float(running_samples)
+            epoch_acc = float(running_corrects) // float(running_samples)
+
+            if phase == 'valid':
+                if epoch_loss < best_loss:
+                    best_loss = epoch_loss
+                else:
+                    loss_counter += 1
+
+            print('{} loss: {:.4f}, acc: {:.4f}, best loss: {:.4f}'.format(phase,
+                                                                           epoch_loss,
+                                                                           epoch_acc,
+                                                                           best_loss))
+
+            # Break training when loss starts to increase. I am not sure if this is required since hpo tuning should handle these issues.
+        if loss_counter == 1:
+            print("Finish training because epoch loss increased")
+            break
+
+        # Comment out these lines if you actually would like to train the model
+        if epoch == 0:
+            print("Finish training on Epoch 0")
+            break
+    return model
+
+
+def create_pretrained_model():
+    '''
+    Create pretrained resnet50 model
+    When creating our model we need to freeze all the convolutional layers which we do by their requires_grad() attribute to False.
+    We also need to add a fully connected layer on top of it which we do use the Sequential API.
+    '''
+    model = models.resnet50(pretrained=True, progress=True)
 
     for param in model.parameters():
         param.requires_grad = False
 
-    num_features=model.fc.in_features
     model.fc = nn.Sequential(
-        nn.Linear(num_features, 10))
+        nn.Linear(2048, 128),
+        nn.ReLU(inplace=True),
+        nn.Linear(128, 133))
     return model
 
-def _get_train_data_loader(batch_size, training_dir):
-    logger.info("Get train data loader")
-    dataset = datasets.CIFAR10(
-        training_dir,
-        train=True,
-        transform=transforms.Compose(
-            [transforms.ToTensor()]
-        ),
-    )
 
-    return torch.utils.data.DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True
-    )
+def create_data_loaders(data, batch_size):
+    # Modernized data loaders to skip downloading dataset every time
+    train_data_path = os.path.join(data, 'train')
+    test_data_path = os.path.join(data, 'test')
+    validation_data_path = os.path.join(data, 'valid')
+
+    train_transform = transforms.Compose([
+        transforms.RandomResizedCrop((224, 224)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+    ])
+
+    test_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+    ])
+
+    train_data = torchvision.datasets.ImageFolder(root=train_data_path, transform=train_transform)
+    train_data_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
+
+    test_data = torchvision.datasets.ImageFolder(root=test_data_path, transform=test_transform)
+    test_data_loader = torch.utils.data.DataLoader(test_data, batch_size=batch_size, shuffle=True)
+
+    validation_data = torchvision.datasets.ImageFolder(root=validation_data_path, transform=test_transform)
+    validation_data_loader = torch.utils.data.DataLoader(validation_data, batch_size=batch_size, shuffle=True)
+
+    return train_data_loader, test_data_loader, validation_data_loader
 
 
-def _get_test_data_loader(test_batch_size, training_dir):
-    logger.info("Get test data loader")
-    return torch.utils.data.DataLoader(
-        datasets.CIFAR10(
-            root=training_dir,
-            train=False,
-            transform=transforms.Compose(
-                [transforms.ToTensor()]
-            ),
-        ),
-        batch_size=test_batch_size,
-        shuffle=True,
-    )
+def main(args):
+    print(f'Hyperparameters: LR: {args.lr}, Batch Size: {args.batch_size}')
+    print(f'Database Path: {args.data_path}')
 
-def train(args):
     '''
-    TODO: Initialize a model by calling the net function
+    Create data loaders
     '''
-    train_loader = _get_train_data_loader(args.batch_size, args.data_dir)
-    test_loader = _get_test_data_loader(args.test_batch_size, args.data_dir)
+    train_loader, test_loader, validation_loader = create_data_loaders(args.data_path, args.batch_size)
 
-    model = net()
+    '''
+    Initialize pretrained model
+    '''
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print(f"Running on Device {device}")
+    model = create_pretrained_model()
+    model.to(device)
 
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    '''
+    Create loss and optimizer
+    '''
+    criterion = nn.CrossEntropyLoss(ignore_index=133)
+    optimizer = optim.Adam(model.fc.parameters(), lr=args.lr)
 
-    for epoch in range(1, args.epochs + 1):
-        model.train()
-        for batch_idx, (data, target) in enumerate(train_loader, 1):
-            optimizer.zero_grad()
-            output = model(data)
-            loss = F.nll_loss(output, target)
-            loss.backward()
-            optimizer.step()
-            if batch_idx % 100 == 0:
-                logger.info(
-                    "Train Epoch: {} [{}/{} ({:.0f}%)] Loss: {:.6f}".format(
-                        epoch,
-                        batch_idx * len(data),
-                        len(train_loader.dataset),
-                        100.0 * batch_idx / len(train_loader),
-                        loss.item(),
-                        )
-                )
-        test(model, test_loader)
-    save_model(model, args.model_dir)
+    '''
+    Call the train function to start training model
+    '''
+    print("Starting Model Training")
+    model = train(model, train_loader, validation_loader, criterion, optimizer, device)
 
-if __name__=='__main__':
-    parser = argparse.ArgumentParser()
+    '''
+    Test the model to see its accuracy
+    '''
+    print("Testing Model")
+    test(model, test_loader, criterion, device)
 
-    # Data and model checkpoints directories
+    '''
+    Save the trained model
+    '''
+    print("Saving Model")
+    torch.save(model.cpu().state_dict(), os.path.join(args.model_dir, "model.pth"))
+
+
+if __name__ == '__main__':
+    '''
+    All the hyperparameters needed to use to train your model.
+    '''
+    # Training settings
+    parser = argparse.ArgumentParser(description="Udacity AWS ML project 3 - HPO tuning")
     parser.add_argument(
         "--batch-size",
         type=int,
@@ -176,31 +231,12 @@ if __name__=='__main__':
         help="input batch size for training (default: 64)",
     )
     parser.add_argument(
-        "--test-batch-size",
-        type=int,
-        default=1000,
-        metavar="N",
-        help="input batch size for testing (default: 1000)",
+        "--lr", type=float, default=1.0, metavar="LR", help="learning rate (default: 1.0)"
     )
-    parser.add_argument(
-        "--epochs",
-        type=int,
-        default=5,
-        metavar="N",
-        help="number of epochs to train (default: 10)",
-    )
-    parser.add_argument(
-        "--lr", type=float, default=0.01, metavar="LR", help="learning rate (default: 0.01)"
-    )
-    parser.add_argument(
-        "--momentum", type=float, default=0.5, metavar="M", help="SGD momentum (default: 0.5)"
-    )
+    parser.add_argument('--data_path', type=str, default=os.environ['SM_CHANNEL_TRAINING'])
+    parser.add_argument('--model_dir', type=str, default=os.environ['SM_MODEL_DIR'])
 
-    # Container environment
-    parser.add_argument("--hosts", type=list, default=json.loads(os.environ["SM_HOSTS"]))
-    parser.add_argument("--current-host", type=str, default=os.environ["SM_CURRENT_HOST"])
-    parser.add_argument("--model-dir", type=str, default=os.environ["SM_MODEL_DIR"])
-    parser.add_argument("--data-dir", type=str, default=os.environ["SM_CHANNEL_TRAINING"])
-    parser.add_argument("--num-gpus", type=int, default=os.environ["SM_NUM_GPUS"])
+    args = parser.parse_args()
+    print(args)
 
-    train(parser.parse_args())
+    main(args)
