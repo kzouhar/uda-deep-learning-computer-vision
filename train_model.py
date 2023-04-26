@@ -1,70 +1,81 @@
-#TODO: Import your dependencies.
-#For instance, below are some dependencies you might need if you are using Pytorch
 import numpy as np
+import pandas as pd
 import torch
+import os
 import torch.nn as nn
 import torch.optim as optim
 import torchvision
 import torchvision.models as models
 import torchvision.transforms as transforms
-import smdebug.pytorch as smd
+from torchvision.io import read_image
+from torch.utils.data import Dataset, DataLoader
 
 import argparse
+import csv
+import time
 
+from smdebug import modes
+from smdebug.pytorch import get_hook
+import smdebug.pytorch as smd
 
-#TODO: Import dependencies for Debugging andd Profiling
+# Add this line of you don't want your job to fail unexpected after multiple hours of training
+# https://stackoverflow.com/questions/12984426/pil-ioerror-image-file-truncated-with-big-images
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 def test(model, test_loader, criterion, device, hook):
     '''
-    TODO: Complete this function that can take a model and a 
-          testing data loader and will get the test accuray/loss of the model
-          Remember to include any debugging/profiling hooks that you might need
+    This function takes a model and a testing data loader and will get the test accuray/loss of the model
     '''
     print("Testing Model on Whole Testing Dataset")
     model.eval()
-    running_loss=0
-    running_corrects=0
+    if hook:
+        hook.set_mode(modes.EVAL)
 
-    hook.set_mode(smd.modes.EVAL)
+    running_loss=0.0
+    running_corrects=0.0
 
     for inputs, labels in test_loader:
         inputs=inputs.to(device)
         labels=labels.to(device)
         outputs=model(inputs)
-        loss = criterion(outputs, labels)
+        loss=criterion(outputs, labels)
         _, preds = torch.max(outputs, 1)
-        running_loss += loss.item() * inputs.size(0)
-        running_corrects += torch.sum(preds == labels.data).item()
+        running_loss += float(loss.item() * inputs.size(0))
+        running_corrects += float(torch.sum(preds == labels.data))
 
-    total_loss = running_loss / len(test_loader.dataset)
-    total_acc = running_corrects/ len(test_loader.dataset)
-    print(f"Testing Accuracy: {100*total_acc}, Testing Loss: {total_loss}")
+    total_loss = float(running_loss) // float(len(test_loader.dataset))
+    total_acc = float(running_corrects) // float(len(test_loader.dataset))
+
+    print(f"Testing Loss: {total_loss}")
+    print(f"Testing Accuracy: {total_acc}")
 
 def train(model, train_loader, validation_loader, criterion, optimizer, device, hook):
     '''
-    TODO: Complete this function that can take a model and
-          data loaders for training and will get train the model
-          Remember to include any debugging/profiling hooks that you might need
+    This function takes a model and data loaders for training and will get train the model
     '''
-    epochs=2
-    best_loss=1e6
+    # Here we can train a bit longer on a bigger part of dataset. But still don't overkill yourself, because our time is precious
+    epochs=5
+    best_loss=float(1e6)
     image_dataset={'train':train_loader, 'valid':validation_loader}
     loss_counter=0
 
-    hook.set_mode(smd.modes.TRAIN)
-
     for epoch in range(epochs):
         for phase in ['train', 'valid']:
-            print(f"Epoch {epoch}, Phase {phase}")
+            print(f"Epoch: {epoch}, Phase: {phase}")
             if phase=='train':
                 model.train()
+                hook.set_mode(modes.TRAIN)
             else:
                 model.eval()
+                hook.set_mode(modes.EVAL)
             running_loss = 0.0
-            running_corrects = 0
+            running_corrects = 0.0
             running_samples=0
 
-            for step, (inputs, labels) in enumerate(image_dataset[phase]):
+            total_samples_in_phase = len(image_dataset[phase].dataset)
+
+            for inputs, labels in image_dataset[phase]:
                 inputs=inputs.to(device)
                 labels=labels.to(device)
                 outputs = model(inputs)
@@ -76,28 +87,30 @@ def train(model, train_loader, validation_loader, criterion, optimizer, device, 
                     optimizer.step()
 
                 _, preds = torch.max(outputs, 1)
-                running_loss += loss.item() * inputs.size(0)
-                running_corrects += torch.sum(preds == labels.data).item()
+                running_loss += float(loss.item() * inputs.size(0))
+                running_corrects += float(torch.sum(preds == labels.data))
                 running_samples+=len(inputs)
-                if running_samples % 2000  == 0:
-                    accuracy = running_corrects/running_samples
-                    print("Images [{}/{} ({:.0f}%)] Loss: {:.2f} Accuracy: {}/{} ({:.2f}%)".format(
-                        running_samples,
-                        len(image_dataset[phase].dataset),
-                        100.0 * (running_samples / len(image_dataset[phase].dataset)),
-                        loss.item(),
-                        running_corrects,
-                        running_samples,
-                        100.0*accuracy,
-                        )
-                    )
+
+                accuracy = float(running_corrects)/float(running_samples)
+                print("Epoch {}, Phase {}, Images [{}/{} ({:.0f}%)] Loss: {:.2f} Accuracy: {}/{} ({:.2f}%)".format(
+                    epoch,
+                    phase,
+                    running_samples,
+                    total_samples_in_phase,
+                    100.0 * (float(running_samples) / float(total_samples_in_phase)),
+                    loss.item(),
+                    running_corrects,
+                    running_samples,
+                    100.0*accuracy,
+                    ))
 
                 #NOTE: Comment lines below to train and test on whole dataset
-                if running_samples>(0.2*len(image_dataset[phase].dataset)):
+                if (running_samples>(0.1*total_samples_in_phase)):
                     break
 
-            epoch_loss = running_loss / running_samples
-            epoch_acc = running_corrects / running_samples
+
+            epoch_loss = float(running_loss) // float(running_samples)
+            epoch_acc = float(running_corrects) // float(running_samples)
 
             if phase=='valid':
                 if epoch_loss<best_loss:
@@ -105,101 +118,132 @@ def train(model, train_loader, validation_loader, criterion, optimizer, device, 
                 else:
                     loss_counter+=1
 
+
+            print('{} loss: {:.4f}, acc: {:.4f}, best loss: {:.4f}'.format(phase,
+                                                                           epoch_loss,
+                                                                           epoch_acc,
+                                                                           best_loss))
+
+        # Break training when loss starts to increase. I am not sure if this is required since training should handle these issues.
         if loss_counter==1:
+            print("Finish training because epoch loss increased")
             break
     return model
-    
-def net():
+
+
+def create_pretrained_model():
     '''
-    TODO: Complete this function that initializes your model
-          Remember to use a pretrained model
+    Create pretrained resnet50 model
+    When creating our model we need to freeze all the convolutional layers which we do by their requires_grad() attribute to False.
+    We also need to add a fully connected layer on top of it which we do use the Sequential API.
     '''
-    model = models.resnet18(pretrained=True)
+    model = models.resnet50(pretrained=True, progress=True)
 
     for param in model.parameters():
         param.requires_grad = False
 
-    num_features=model.fc.in_features
     model.fc = nn.Sequential(
-        nn.Linear(num_features, 10))
+        nn.Linear(2048, 128),
+        nn.ReLU(inplace=True),
+        nn.Linear(128, 133))
     return model
 
+
 def create_data_loaders(data, batch_size):
-    '''
-    This is an optional function that you may or may not need to implement
-    depending on whether you need to use data loaders or not
-    '''
-    training_transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.Resize(224),
+    # Modernized data loaders to skip downloading dataset every time
+    train_data_path = os.path.join(data, 'train')
+    test_data_path = os.path.join(data, 'test')
+    validation_data_path=os.path.join(data, 'valid')
+
+    train_transform = transforms.Compose([
+        transforms.RandomResizedCrop((224, 224)),
+        transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+    ])
 
-
-    trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
-                                            download=True, transform=training_transform)
-
-    train_loader = torch.utils.data.DataLoader(trainset, batch_size=batch_size,
-                                               shuffle=True)
-
-    testing_transform = transforms.Compose([
-        transforms.Resize(224),
+    test_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+    ])
 
-    testset = torchvision.datasets.CIFAR10(root='./data', train=False,
-                                           download=True, transform=testing_transform)
+    train_data = torchvision.datasets.ImageFolder(root=train_data_path, transform=train_transform)
+    train_data_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
 
-    test_loader = torch.utils.data.DataLoader(testset, batch_size=batch_size,
-                                              shuffle=False)
+    test_data = torchvision.datasets.ImageFolder(root=test_data_path, transform=test_transform)
+    test_data_loader  = torch.utils.data.DataLoader(test_data, batch_size=batch_size, shuffle=True)
 
-    return (train_loader, test_loader)
+    validation_data = torchvision.datasets.ImageFolder(root=validation_data_path, transform=test_transform)
+    validation_data_loader  = torch.utils.data.DataLoader(validation_data, batch_size=batch_size, shuffle=True)
+
+    return train_data_loader, test_data_loader, validation_data_loader
 
 def main(args):
-
-    (train_loader, test_loader) = create_data_loaders()
+    print(f'Hyperparameters: LR: {args.lr}, Batch Size: {args.batch_size}')
+    print(f'Database Path: {args.data_path}')
 
     '''
-    TODO: Initialize a model by calling the net function
+    Create data loaders
     '''
-    batch_size = 2
+    train_loader, test_loader, validation_loader=create_data_loaders(args.data_path, args.batch_size)
 
+    '''
+    Initialize pretrained model
+    '''
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f"Running on Device {device}")
-
-    model=net()
-    
-    '''
-    TODO: Create your loss and optimizer
-    '''
-
-    loss_criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.fc.parameters(), lr=0.001)
+    model=create_pretrained_model()
+    model.to(device)
 
     '''
-    TODO: Call the train function to start training your model
-    Remember that you will need to set up a way to get training data from S3
+    Create loss and optimizer
     '''
+    criterion = nn.CrossEntropyLoss(ignore_index=133)
+    optimizer = optim.Adam(model.fc.parameters(), lr=args.lr)
 
-    model=train(model, train_loader, test_loader,  loss_criterion, optimizer, device)
-    
     '''
-    TODO: Test the model to see its accuracy
+    Create debug hook
     '''
+    hook = smd.Hook.create_from_json_file()
+    hook.register_hook(model)
+    hook.register_loss(criterion)
 
-    test(model, test_loader, loss_criterion, device)
-    
     '''
-    TODO: Save the trained model
+    Call the train function to start training model
     '''
-    torch.save(model, "path")
+    print("Starting Model Training")
+    model=train(model, train_loader, validation_loader, criterion, optimizer, device, hook)
+
+    '''
+    Test the model to see its accuracy
+    '''
+    print("Testing Model")
+    test(model, test_loader, criterion, device, hook)
+
+    '''
+    Save the trained model
+    '''
+    print("Saving Model")
+    torch.save(model.cpu().state_dict(), os.path.join(args.model_dir, "model.pth"))
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
     '''
-    TODO: Specify any training args that you might need
+    All the hyperparameters needed to use to train your model.
     '''
-    
-    args=parser.parse_args()
-    
+    # Training settings
+    parser = argparse.ArgumentParser(description="Udacity AWS ML project 3 - Model training with debug")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=64,
+        metavar="N",
+        help="input batch size for training (default: 64)",
+    )
+    parser.add_argument(
+        "--lr", type=float, default=1.0, metavar="LR", help="learning rate (default: 1.0)"
+    )
+    parser.add_argument('--data_path', type=str, default=os.environ['SM_CHANNEL_TRAINING'])
+    parser.add_argument('--model_dir', type=str, default=os.environ['SM_MODEL_DIR'])
+    args = parser.parse_args()
+
     main(args)
