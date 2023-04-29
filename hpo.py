@@ -7,14 +7,10 @@ import torch.optim as optim
 import torchvision
 import torchvision.models as models
 import torchvision.transforms as transforms
-from torchvision.io import read_image
 from torch.utils.data import Dataset, DataLoader
 
 import argparse
-import csv
 
-# Add this line of you don't want your job to fail unexpected after multiple hours of training
-# https://stackoverflow.com/questions/12984426/pil-ioerror-image-file-truncated-with-big-images
 from PIL import ImageFile
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -24,7 +20,6 @@ def test(model, test_loader, criterion, device):
     '''
     This function takes a model and a testing data loader and will get the test accuray/loss of the model
     '''
-    print("Testing Model on Whole Testing Dataset")
     model.eval()
     running_loss = 0.0
     running_corrects = 0
@@ -41,16 +36,14 @@ def test(model, test_loader, criterion, device):
     total_loss = float(running_loss) // float(len(test_loader.dataset))
     total_acc = float(running_corrects) // float(len(test_loader.dataset))
 
-    # here works regexp for "Testing Loss"
-    print(f"Testing Loss: {total_loss}")
-    print(f"Testing Accuracy: {total_acc}")
+    print(f"test-loss: {total_loss}")
+    print(f"test-accuracy: {total_acc}")
 
 
 def train(model, train_loader, validation_loader, criterion, optimizer, device):
     '''
     This function takes a model and data loaders for training and will get train the model
     '''
-    # Number of epochs don't matter here - hpo tuning will be stopped after first epoch (see end of loop)
     epochs = 5
     best_loss = float(1e6)
     image_dataset = {'train': train_loader, 'valid': validation_loader}
@@ -98,33 +91,14 @@ def train(model, train_loader, validation_loader, criterion, optimizer, device):
                     100.0 * accuracy,
                 ))
 
-                # NOTE: Comment lines below to train and test on whole dataset
-                if (running_samples > (0.1 * total_samples_in_phase)):
-                    break
-
             epoch_loss = float(running_loss) // float(running_samples)
             epoch_acc = float(running_corrects) // float(running_samples)
-
-            if phase == 'valid':
-                if epoch_loss < best_loss:
-                    best_loss = epoch_loss
-                else:
-                    loss_counter += 1
 
             print('{} loss: {:.4f}, acc: {:.4f}, best loss: {:.4f}'.format(phase,
                                                                            epoch_loss,
                                                                            epoch_acc,
                                                                            best_loss))
 
-            # Break training when loss starts to increase. I am not sure if this is required since hpo tuning should handle these issues.
-        if loss_counter == 1:
-            print("Finish training because epoch loss increased")
-            break
-
-        # Comment out these lines if you actually would like to train the model
-        if epoch == 0:
-            print("Finish training on Epoch 0")
-            break
     return model
 
 

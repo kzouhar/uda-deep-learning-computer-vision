@@ -18,8 +18,6 @@ from smdebug import modes
 from smdebug.pytorch import get_hook
 import smdebug.pytorch as smd
 
-# Add this line of you don't want your job to fail unexpected after multiple hours of training
-# https://stackoverflow.com/questions/12984426/pil-ioerror-image-file-truncated-with-big-images
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -47,18 +45,16 @@ def test(model, test_loader, criterion, device, hook):
     total_loss = float(running_loss) // float(len(test_loader.dataset))
     total_acc = float(running_corrects) // float(len(test_loader.dataset))
 
-    print(f"Testing Loss: {total_loss}")
-    print(f"Testing Accuracy: {total_acc}")
+    print(f"test-loss: {total_loss}")
+    print(f"test-accuracy: {total_acc}")
 
 def train(model, train_loader, validation_loader, criterion, optimizer, device, hook):
     '''
     This function takes a model and data loaders for training and will get train the model
     '''
-    # Here we can train a bit longer on a bigger part of dataset. But still don't overkill yourself, because our time is precious
     epochs=5
     best_loss=float(1e6)
     image_dataset={'train':train_loader, 'valid':validation_loader}
-    loss_counter=0
 
     for epoch in range(epochs):
         for phase in ['train', 'valid']:
@@ -104,30 +100,14 @@ def train(model, train_loader, validation_loader, criterion, optimizer, device, 
                     100.0*accuracy,
                     ))
 
-                #NOTE: Comment lines below to train and test on whole dataset
-                if (running_samples>(0.1*total_samples_in_phase)):
-                    break
-
-
             epoch_loss = float(running_loss) // float(running_samples)
             epoch_acc = float(running_corrects) // float(running_samples)
-
-            if phase=='valid':
-                if epoch_loss<best_loss:
-                    best_loss=epoch_loss
-                else:
-                    loss_counter+=1
-
 
             print('{} loss: {:.4f}, acc: {:.4f}, best loss: {:.4f}'.format(phase,
                                                                            epoch_loss,
                                                                            epoch_acc,
                                                                            best_loss))
 
-        # Break training when loss starts to increase. I am not sure if this is required since training should handle these issues.
-        if loss_counter==1:
-            print("Finish training because epoch loss increased")
-            break
     return model
 
 
