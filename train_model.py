@@ -53,7 +53,6 @@ def train(model, train_loader, validation_loader, criterion, optimizer, device, 
     This function takes a model and data loaders for training and will get train the model
     '''
     epochs=5
-    best_loss=float(1e6)
     image_dataset={'train':train_loader, 'valid':validation_loader}
 
     for epoch in range(epochs):

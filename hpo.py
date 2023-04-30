@@ -36,18 +36,17 @@ def test(model, test_loader, criterion, device):
     total_loss = float(running_loss) // float(len(test_loader.dataset))
     total_acc = float(running_corrects) // float(len(test_loader.dataset))
 
-    print(f"test-loss: {total_loss}")
-    print(f"test-accuracy: {total_acc}")
+    print(f"Testing Loss: {total_loss}")
+    print(f"Testing Accuracy: {total_acc}")
 
 
-def train(model, train_loader, validation_loader, criterion, optimizer, device):
+def train(model, train_loader, validation_loader, criterion, optimizer, device) :
     '''
     This function takes a model and data loaders for training and will get train the model
     '''
-    epochs = 5
+    epochs = 1
     best_loss = float(1e6)
     image_dataset = {'train': train_loader, 'valid': validation_loader}
-    loss_counter = 0
 
     for epoch in range(epochs):
         for phase in ['train', 'valid']:
