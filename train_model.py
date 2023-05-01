@@ -48,10 +48,19 @@ def test(model, test_loader, criterion, device, hook):
     print(f"Testing Loss: {total_loss}")
     print(f"Testing Accuracy: {total_acc}")
 
+<<<<<<< HEAD
 def train(model, train_loader, criterion, optimizer, device, hook, epochs):
     '''
     This function takes a model and data loaders for training and will get train the model
     '''
+=======
+def train(model, train_loader, criterion, optimizer, device, hook):
+    '''
+    This function takes a model and data loaders for training and will get train the model
+    '''
+    epochs=5
+
+>>>>>>> 02f4a8002fa620f6f21cb2790dd76dcf6c4f7f19
     for epoch in range(epochs):
             print(f"Epoch: {epoch}")
             model.train()
@@ -64,8 +73,13 @@ def train(model, train_loader, criterion, optimizer, device, hook, epochs):
             total_samples_in_phase = len(train_loader.dataset)
 
             for inputs, labels in train_loader:
+<<<<<<< HEAD
                 inputs = inputs.to(device)
                 labels = labels.to(device)
+=======
+                inputs=inputs.to(device)
+                labels=labels.to(device)
+>>>>>>> 02f4a8002fa620f6f21cb2790dd76dcf6c4f7f19
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
 
@@ -93,7 +107,11 @@ def train(model, train_loader, criterion, optimizer, device, hook, epochs):
             epoch_loss = float(running_loss) // float(running_samples)
             epoch_acc = float(running_corrects) // float(running_samples)
 
+<<<<<<< HEAD
             print('loss: {:.4f}, acc: {:.4f}'.format(epoch_loss, epoch_acc))
+=======
+            print('{} loss: {:.4f}, acc: {:.4f}, best loss: {:.4f}'.format(epoch_loss, epoch_acc))
+>>>>>>> 02f4a8002fa620f6f21cb2790dd76dcf6c4f7f19
 
     return model
 
