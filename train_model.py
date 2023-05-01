@@ -8,7 +8,7 @@ import torchvision
 import torchvision.models as models
 import torchvision.transforms as transforms
 from torchvision.io import read_image
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, ConcatDataset
 
 import argparse
 import csv
@@ -45,51 +45,42 @@ def test(model, test_loader, criterion, device, hook):
     total_loss = float(running_loss) // float(len(test_loader.dataset))
     total_acc = float(running_corrects) // float(len(test_loader.dataset))
 
-    print(f"test-loss: {total_loss}")
-    print(f"test-accuracy: {total_acc}")
+    print(f"Testing Loss: {total_loss}")
+    print(f"Testing Accuracy: {total_acc}")
 
-def train(model, train_loader, validation_loader, criterion, optimizer, device, hook):
+def train(model, train_loader, criterion, optimizer, device, hook, epochs):
     '''
     This function takes a model and data loaders for training and will get train the model
     '''
-    epochs=5
-    image_dataset={'train':train_loader, 'valid':validation_loader}
-
     for epoch in range(epochs):
-        for phase in ['train', 'valid']:
-            print(f"Epoch: {epoch}, Phase: {phase}")
-            if phase=='train':
-                model.train()
-                hook.set_mode(modes.TRAIN)
-            else:
-                model.eval()
-                hook.set_mode(modes.EVAL)
+            print(f"Epoch: {epoch}")
+            model.train()
+            hook.set_mode(modes.TRAIN)
+
             running_loss = 0.0
             running_corrects = 0.0
             running_samples=0
 
-            total_samples_in_phase = len(image_dataset[phase].dataset)
+            total_samples_in_phase = len(train_loader.dataset)
 
-            for inputs, labels in image_dataset[phase]:
-                inputs=inputs.to(device)
-                labels=labels.to(device)
+            for inputs, labels in train_loader:
+                inputs = inputs.to(device)
+                labels = labels.to(device)
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
 
-                if phase=='train':
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
                 _, preds = torch.max(outputs, 1)
                 running_loss += float(loss.item() * inputs.size(0))
                 running_corrects += float(torch.sum(preds == labels.data))
-                running_samples+=len(inputs)
+                running_samples += len(inputs)
 
                 accuracy = float(running_corrects)/float(running_samples)
-                print("Epoch {}, Phase {}, Images [{}/{} ({:.0f}%)] Loss: {:.2f} Accuracy: {}/{} ({:.2f}%)".format(
+                print("Epoch {}, Images [{}/{} ({:.0f}%)] Loss: {:.2f} Accuracy: {}/{} ({:.2f}%)".format(
                     epoch,
-                    phase,
                     running_samples,
                     total_samples_in_phase,
                     100.0 * (float(running_samples) / float(total_samples_in_phase)),
@@ -102,10 +93,7 @@ def train(model, train_loader, validation_loader, criterion, optimizer, device, 
             epoch_loss = float(running_loss) // float(running_samples)
             epoch_acc = float(running_corrects) // float(running_samples)
 
-            print('{} loss: {:.4f}, acc: {:.4f}, best loss: {:.4f}'.format(phase,
-                                                                           epoch_loss,
-                                                                           epoch_acc,
-                                                                           best_loss))
+            print('loss: {:.4f}, acc: {:.4f}'.format(epoch_loss, epoch_acc))
 
     return model
 
@@ -146,15 +134,15 @@ def create_data_loaders(data, batch_size):
     ])
 
     train_data = torchvision.datasets.ImageFolder(root=train_data_path, transform=train_transform)
-    train_data_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
+    validation_data = torchvision.datasets.ImageFolder(root=validation_data_path, transform=test_transform)
+    combined_dataset = ConcatDataset([train_data, validation_data])
+
+    train_data_loader = torch.utils.data.DataLoader(combined_dataset, batch_size=batch_size, shuffle=True)
 
     test_data = torchvision.datasets.ImageFolder(root=test_data_path, transform=test_transform)
     test_data_loader  = torch.utils.data.DataLoader(test_data, batch_size=batch_size, shuffle=True)
 
-    validation_data = torchvision.datasets.ImageFolder(root=validation_data_path, transform=test_transform)
-    validation_data_loader  = torch.utils.data.DataLoader(validation_data, batch_size=batch_size, shuffle=True)
-
-    return train_data_loader, test_data_loader, validation_data_loader
+    return train_data_loader, test_data_loader
 
 def main(args):
     print(f'Hyperparameters: LR: {args.lr}, Batch Size: {args.batch_size}')
@@ -163,7 +151,7 @@ def main(args):
     '''
     Create data loaders
     '''
-    train_loader, test_loader, validation_loader=create_data_loaders(args.data_path, args.batch_size)
+    train_loader, test_loader=create_data_loaders(args.data_path, args.batch_size)
 
     '''
     Initialize pretrained model
@@ -190,8 +178,9 @@ def main(args):
     Call the train function to start training model
     '''
     print("Starting Model Training")
-    model=train(model, train_loader, validation_loader, criterion, optimizer, device, hook)
-
+    epochs = 5
+    model = train(model, train_loader, criterion, optimizer, device, hook, epochs)
+    
     '''
     Test the model to see its accuracy
     '''
