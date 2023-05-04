@@ -48,7 +48,6 @@ def test(model, test_loader, criterion, device, hook):
     print(f"Testing Loss: {total_loss}")
     print(f"Testing Accuracy: {total_acc}")
 
-<<<<<<< HEAD
 def train(model, train_loader, criterion, optimizer, device, hook, epochs):
     '''
     This function takes a model and data loaders for training and will get train the model
